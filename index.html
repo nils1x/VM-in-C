@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>VM — Registers & Stack Visualizer</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<h1>MAC VM — Register &amp; Stack Architecture</h1>
+<p class="subtitle">Interactive Visualizer — click any instruction to see its stack effect</p>
+<p class="subtitle">Here you can find the source code: <a href="https://nils1x.github.io/VM-in-C/" target="_blank" rel="noopener noreferrer">nils1x.github.io/VM-in-C</a></p>
+
+<div class="layout">
+
+  <!-- REGISTERS -->
+  <div class="panel">
+    <div class="panel-title">📦 Registers <span style="color:#475569">(static int registers[REGISTER_SIZE])</span></div>
+    <div class="reg-grid" id="regGrid"></div>
+  </div>
+
+  <!-- STACK -->
+  <div class="panel">
+    <div class="panel-title">🗂 Stack <span style="color:#475569">(int stack[256])</span></div>
+    <div class="stack-wrap" id="stackWrap"></div>
+  </div>
+
+  <!-- INSTRUCTION SET -->
+  <div class="panel">
+    <div class="panel-title">⚡ Instruction Set <span style="color:#475569">— click to expand</span></div>
+    <div class="instr-list" id="instrList"></div>
+  </div>
+
+</div>
+
+<!-- CONTROLS -->
+<div class="controls">
+  <div class="ctrl-group">
+    <input class="input-val" type="number" id="pushVal" value="42" min="0" max="255">
+    <button class="exec" onclick="execPSH()">PSH</button>
+    <button class="exec" onclick="execPOP()">POP</button>
+    <button class="exec" onclick="execADD()">ADD</button>
+    <button class="exec" onclick="execSUB()">SUB</button>
+    <button class="exec" onclick="execMUL()">MUL</button>
+    <button class="exec" onclick="execDIV()">DIV</button>
+    <button class="exec" onclick="execSLT()">SLT</button>
+  </div>
+  <div class="ctrl-sep"></div>
+  <div class="ctrl-group">
+    <button onclick="nextIP()">IP++</button>
+    <button onclick="reset()">Reset</button>
+  </div>
+</div>
+
+<!-- LOG -->
+<div class="log-wrap">
+  <div class="log-title">
+    <span>📋 Execution Log</span>
+    <span class="log-clear" onclick="clearLog()">clear</span>
+  </div>
+  <div class="log-body" id="logBody">
+    <span style="color:#2d3148">— execute instructions above to see what happens —</span>
+  </div>
+</div>
+
+<!-- LEGEND -->
+<div class="legend">
+  <div class="legend-item"><div class="dot" style="background:#6366f1"></div>General Purpose</div>
+  <div class="legend-item"><div class="dot" style="background:#f59e0b"></div>Excess (EX, EXA)</div>
+  <div class="legend-item"><div class="dot" style="background:#22d3ee"></div>Pointers (IP, SP)</div>
+  <div class="legend-item"><div class="dot" style="background:#f472b6"></div>Top of stack (operand A)</div>
+  <div class="legend-item"><div class="dot" style="background:#a78bfa"></div>Second (operand B)</div>
+  <div class="legend-item"><div class="dot" style="background:#22c55e"></div>Result / pushed value</div>
+</div>
+
+<script>
+const STACK_SIZE = 10;
+
+const REGISTERS = [
+  { name:'A',   cls:'gp',      desc:'General purpose' },
+  { name:'B',   cls:'gp',      desc:'General purpose' },
+  { name:'C',   cls:'gp',      desc:'General purpose' },
+  { name:'D',   cls:'gp',      desc:'General purpose' },
+  { name:'E',   cls:'gp',      desc:'General purpose' },
+  { name:'F',   cls:'gp',      desc:'General purpose' },
+  { name:'I',   cls:'gp',      desc:'General purpose (index)' },
+  { name:'J',   cls:'gp',      desc:'General purpose (index)' },
+  { name:'EX',  cls:'special', desc:'Excess / overflow result' },
+  { name:'EXA', cls:'special', desc:'Additional excess' },
+  { name:'IP',  cls:'ptr',     desc:'Instruction pointer' },
+  { name:'SP',  cls:'ptr',     desc:'Stack pointer' },
+];
+
+// Stack effect diagrams per instruction
+const INSTR_INFO = [
+  {
+    id:0, name:'HLT', sig:'hlt', desc:'Halt execution',
+    effect:'Stops the main loop. No stack changes.',
+    diagram: null
+  },
+  {
+    id:1, name:'PSH', sig:'psh val', desc:'Push value onto stack',
+    effect:'Increments SP, then writes <val> to stack[SP]. IP advances by 1 extra to skip the operand byte.',
+    diagram: { before: [{ label:'...', cls:'' }], after: [{ label:'val', cls:'res' }, { label:'...', cls:'' }] }
+  },
+  {
+    id:2, name:'POP', sig:'pop', desc:'Pop top of stack',
+    effect:'Decrements SP. The value is gone — nothing is returned.',
+    diagram: { before: [{ label:'top', cls:'top' }, { label:'...', cls:'' }], after: [{ label:'...', cls:'' }] }
+  },
+  {
+    id:3, name:'ADD', sig:'add', desc:'Add top two stack values',
+    effect:'Pops top into A, reads new top into B. Computes C = B + A. Writes C back to stack[SP]. Net: consumes 2 values, leaves 1 result.',
+    diagram: { before: [{ label:'A (top)', cls:'top' }, { label:'B', cls:'sec' }, { label:'...', cls:'' }], after: [{ label:'B+A', cls:'res' }, { label:'...', cls:'' }] }
+  },
+  {
+    id:4, name:'MUL', sig:'mul', desc:'Multiply top two stack values',
+    effect:'Same pattern as ADD. Pops A, reads B, computes C = B * A, writes C to stack[SP].',
+    diagram: { before: [{ label:'A (top)', cls:'top' }, { label:'B', cls:'sec' }, { label:'...', cls:'' }], after: [{ label:'B*A', cls:'res' }, { label:'...', cls:'' }] }
+  },
+  {
+    id:5, name:'DIV', sig:'div', desc:'Divide top two stack values',
+    effect:'Pops A, reads B, computes C = B / A (integer division), writes C to stack[SP]. Watch for divide-by-zero.',
+    diagram: { before: [{ label:'A (top)', cls:'top' }, { label:'B', cls:'sec' }, { label:'...', cls:'' }], after: [{ label:'B/A', cls:'res' }, { label:'...', cls:'' }] }
+  },
+  {
+    id:6, name:'SUB', sig:'sub', desc:'Subtract top two stack values',
+    effect:'Pops A, reads B, computes C = B - A, writes C to stack[SP].',
+    diagram: { before: [{ label:'A (top)', cls:'top' }, { label:'B', cls:'sec' }, { label:'...', cls:'' }], after: [{ label:'B-A', cls:'res' }, { label:'...', cls:'' }] }
+  },
+  {
+    id:7, name:'SLT', sig:'slt', desc:'Set less than',
+    effect:'Decrements SP, then computes stack[SP+1] < stack[SP] and stores the result (0 or 1) at stack[SP]. Net: consumes 2, leaves 0 or 1.',
+    diagram: { before: [{ label:'top', cls:'top' }, { label:'second', cls:'sec' }, { label:'...', cls:'' }], after: [{ label:'0 or 1', cls:'res' }, { label:'...', cls:'' }] }
+  },
+  {
+    id:8, name:'MOV', sig:'mov reg_a reg_b', desc:'Copy register value',
+    effect:'reads reg_b = reg_a. No stack interaction. IP advances by 2 extra to skip both operand bytes.',
+    diagram: null
+  },
+  {
+    id:9, name:'SET', sig:'set reg val', desc:'Set register to value',
+    effect:'registers[reg] = val. No stack interaction. IP advances by 2 extra.',
+    diagram: null
+  },
+  {
+    id:10, name:'LOG', sig:'log reg', desc:'Print register value',
+    effect:'Prints registers[reg] to stdout. No stack changes. IP advances 1 extra.',
+    diagram: null
+  },
+  {
+    id:11, name:'IF', sig:'if reg val ip', desc:'Branch if equal',
+    effect:'If registers[reg] == val, sets IP = target (jump). Otherwise IP skips the 3 operand bytes. Stack is untouched.',
+    diagram: null
+  },
+  {
+    id:12, name:'IFN', sig:'ifn reg val ip', desc:'Branch if not equal',
+    effect:'If registers[reg] != val, sets IP = target (jump). Otherwise IP skips 3 operand bytes. Stack is untouched.',
+    diagram: null
+  },
+  {
+    id:13, name:'GLD', sig:'gld reg', desc:'Load register onto stack',
+    effect:'Increments SP, then pushes registers[reg] onto stack[SP]. Useful for feeding register values into arithmetic.',
+    diagram: { before: [{ label:'...', cls:'' }], after: [{ label:'reg', cls:'res' }, { label:'...', cls:'' }] }
+  },
+  {
+    id:14, name:'GPT', sig:'gpt reg', desc:'Pop stack into register',
+    effect:'Sets registers[reg] = stack[SP]. Does NOT decrement SP — the value stays on the stack.',
+    diagram: { before: [{ label:'top', cls:'top' }, { label:'...', cls:'' }], after: [{ label:'top', cls:'top' }, { label:'...', cls:'' }] }
+  },
+  {
+    id:15, name:'NOP', sig:'nop', desc:'No operation',
+    effect:'Does nothing. SP and stack are unchanged.',
+    diagram: null
+  },
+];
+
+// VM state
+let regVals = {};
+REGISTERS.forEach(r => regVals[r.name] = 0);
+let stack    = new Array(STACK_SIZE).fill(null);
+let sp       = -1;
+let ip       = 0;
+let highlights = {}; // { index: 'cls' }
+let changedRegs = new Set();
+let expandedInstr = null;
+
+// ── VM operations ──────────────────────────────────────────────
+
+function execPSH() {
+  const val = parseInt(document.getElementById('pushVal').value) || 0;
+  if (sp >= STACK_SIZE - 1) { addLog('PSH', `stack full`, true); return; }
+  sp++;
+  stack[sp] = val;
+  highlights = { [sp]: 'pushed' };
+  updateReg('SP', sp);
+  addLog('PSH', `pushed ${val} → stack[${sp}]`);
+  render();
+}
+
+function execPOP() {
+  if (sp < 0) { addLog('POP', 'stack empty', true); return; }
+  const val = stack[sp];
+  highlights = { [sp]: 'popped' };
+  render();
+  setTimeout(() => {
+    stack[sp] = null;
+    sp--;
+    highlights = {};
+    updateReg('SP', sp);
+    addLog('POP', `popped ${val} from stack[${sp+1}]`);
+    render();
+  }, 350);
+}
+
+function execADD() {
+  if (sp < 1) { addLog('ADD', 'need at least 2 values', true); return; }
+  const a = stack[sp];
+  const b = stack[sp - 1];
+  const c = b + a;
+  highlights = { [sp]: 'op-a', [sp-1]: 'op-b' };
+  render();
+  setTimeout(() => {
+    stack[sp] = null;
+    sp--;
+    stack[sp] = c;
+    highlights = { [sp]: 'result' };
+    updateReg('A', a); updateReg('B', b); updateReg('C', c);
+    addLog('ADD', `${b} + ${a} = ${c} → stack[${sp}]`);
+    render();
+  }, 400);
+}
+
+function execSUB() {
+  if (sp < 1) { addLog('SUB', 'need at least 2 values', true); return; }
+  const a = stack[sp];
+  const b = stack[sp - 1];
+  const c = b - a;
+  highlights = { [sp]: 'op-a', [sp-1]: 'op-b' };
+  render();
+  setTimeout(() => {
+    stack[sp] = null; sp--;
+    stack[sp] = c;
+    highlights = { [sp]: 'result' };
+    updateReg('A', a); updateReg('B', b); updateReg('C', c);
+    addLog('SUB', `${b} - ${a} = ${c} → stack[${sp}]`);
+    render();
+  }, 400);
+}
+
+function execMUL() {
+  if (sp < 1) { addLog('MUL', 'need at least 2 values', true); return; }
+  const a = stack[sp];
+  const b = stack[sp - 1];
+  const c = b * a;
+  highlights = { [sp]: 'op-a', [sp-1]: 'op-b' };
+  render();
+  setTimeout(() => {
+    stack[sp] = null; sp--;
+    stack[sp] = c;
+    highlights = { [sp]: 'result' };
+    updateReg('A', a); updateReg('B', b); updateReg('C', c);
+    addLog('MUL', `${b} * ${a} = ${c} → stack[${sp}]`);
+    render();
+  }, 400);
+}
+
+function execDIV() {
+  if (sp < 1) { addLog('DIV', 'need at least 2 values', true); return; }
+  const a = stack[sp];
+  if (a === 0) { addLog('DIV', 'divide by zero!', true); return; }
+  const b = stack[sp - 1];
+  const c = Math.trunc(b / a);
+  highlights = { [sp]: 'op-a', [sp-1]: 'op-b' };
+  render();
+  setTimeout(() => {
+    stack[sp] = null; sp--;
+    stack[sp] = c;
+    highlights = { [sp]: 'result' };
+    updateReg('A', a); updateReg('B', b); updateReg('C', c);
+    addLog('DIV', `${b} / ${a} = ${c} → stack[${sp}]`);
+    render();
+  }, 400);
+}
+
+function execSLT() {
+  if (sp < 1) { addLog('SLT', 'need at least 2 values', true); return; }
+  const top    = stack[sp];
+  const second = stack[sp - 1];
+  highlights = { [sp]: 'op-a', [sp-1]: 'op-b' };
+  render();
+  setTimeout(() => {
+    sp--;
+    const result = (second < top) ? 1 : 0;
+    stack[sp] = result;
+    highlights = { [sp]: 'result' };
+    addLog('SLT', `${second} < ${top} → ${result}`);
+    render();
+  }, 400);
+}
+
+function nextIP() {
+  ip = (ip + 1) % INSTR_INFO.length;
+  updateReg('IP', ip);
+  render();
+}
+
+function reset() {
+  REGISTERS.forEach(r => regVals[r.name] = 0);
+  stack    = new Array(STACK_SIZE).fill(null);
+  sp       = -1; ip = 0;
+  highlights   = {};
+  changedRegs  = new Set();
+  expandedInstr = null;
+  render();
+}
+
+function updateReg(name, val) {
+  regVals[name] = val;
+  changedRegs.add(name);
+  setTimeout(() => { changedRegs.delete(name); renderRegs(); }, 700);
+}
+
+// ── Log ────────────────────────────────────────────────────────
+
+function addLog(op, detail, isErr = false) {
+  const lb = document.getElementById('logBody');
+  // clear placeholder
+  if (lb.children.length === 1 && lb.children[0].style.color === 'rgb(45, 49, 72)') lb.innerHTML = '';
+  const el = document.createElement('div');
+  el.className = 'log-entry';
+  el.innerHTML = `<span class="op" style="${isErr ? 'color:#ef4444' : ''}">${op}</span><span class="detail">${detail}</span>`;
+  lb.appendChild(el);
+  lb.scrollTop = lb.scrollHeight;
+}
+
+function clearLog() {
+  document.getElementById('logBody').innerHTML = '<span style="color:#2d3148">— cleared —</span>';
+}
+
+// ── Instruction expand/collapse ────────────────────────────────
+
+function toggleInstr(id) {
+  expandedInstr = expandedInstr === id ? null : id;
+  renderInstrs();
+}
+
+// ── Render ─────────────────────────────────────────────────────
+
+function renderRegs() {
+  const rg = document.getElementById('regGrid');
+  rg.innerHTML = REGISTERS.map(r => {
+    const val = regVals[r.name];
+    const hex = '0x' + val.toString(16).padStart(4,'0').toUpperCase();
+    const hl  = (r.name === 'SP' || r.name === 'IP') ? 'highlighted' : '';
+    const ch  = changedRegs.has(r.name) ? 'changed' : '';
+    return `<div class="reg-row ${r.cls}">
+      <span class="reg-name">${r.name}</span>
+      <span class="reg-desc">${r.desc}</span>
+      <span class="reg-val ${hl} ${ch}">${hex}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderStack() {
+  const sw = document.getElementById('stackWrap');
+  let rows = '';
+  for (let i = STACK_SIZE - 1; i >= 0; i--) {
+    const hl      = highlights[i];
+    const isTop   = (i === sp) && sp >= 0 && !hl;
+    const isEmpty = stack[i] === null;
+    let cls = '';
+    if (hl)      cls = hl;
+    else if (isTop)   cls = 'sp-top';
+    else if (isEmpty) cls = 'empty';
+    const valStr = isEmpty ? '——' : '0x' + stack[i].toString(16).padStart(4,'0').toUpperCase();
+    const label  = hl === 'op-a' ? '← A (top)' : hl === 'op-b' ? '← B' : hl === 'result' ? '← result' : hl === 'pushed' ? '← pushed' : hl === 'popped' ? '← popping' : isTop ? '← SP' : i === 0 ? 'base' : '';
+    rows += `<div class="stack-cell ${cls}">
+      <span class="stack-addr">[${String(i).padStart(2,'0')}]</span>
+      <span class="stack-val">${valStr}</span>
+      <span class="stack-label">${label}</span>
+    </div>`;
+  }
+  sw.innerHTML = rows;
+}
+
+function buildDiagram(diag) {
+  if (!diag) return '';
+  const renderFrames = (frames) => frames.map(f =>
+    `<div class="sframe ${f.cls}">${f.label}</div>`
+  ).join('');
+  return `<div class="stack-diagram">
+    <div class="sdiag"><div class="sdiag-label">BEFORE</div>${renderFrames(diag.before)}</div>
+    <div class="sarrow">→</div>
+    <div class="sdiag"><div class="sdiag-label">AFTER</div>${renderFrames(diag.after)}</div>
+  </div>`;
+}
+
+function renderInstrs() {
+  const il = document.getElementById('instrList');
+  il.innerHTML = INSTR_INFO.map(ins => {
+    const cur      = ins.id === ip ? 'ip-current' : '';
+    const expanded = ins.id === expandedInstr ? 'expanded' : '';
+    const arrow    = ins.id === ip ? '▶' : String(ins.id).padStart(2,' ');
+    const diagramHTML = ins.id === expandedInstr ? buildDiagram(ins.diagram) : '';
+    return `<div class="instr-row ${cur} ${expanded}" onclick="toggleInstr(${ins.id})">
+      <span class="instr-id">${arrow}</span>
+      <span class="instr-name">${ins.name}</span>
+      <span class="instr-sig">${ins.sig}<br><span style="color:#374151">${ins.desc}</span></span>
+      <div class="instr-effect">
+        ${ins.effect}
+        ${diagramHTML}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function render() {
+  renderRegs();
+  renderStack();
+  renderInstrs();
+}
+
+render();
+</script>
+</body>
+</html>
