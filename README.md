@@ -5,7 +5,7 @@ MAC is a simple stack-based virtual machine written in a single C file. It reads
 Rating:
 - Overall: 8/10 - really nice for understanding basic C operations, as well as getting into what's actually happening behind the scenes
 - Feelings: 5/10 - though I've never been a big fan of C, this project still kind of catched me
-- Debuggibility pain: 2/10 - totally fine, LLDB is great, but complex to learn
+- Debuggability pain: 2/10 - totally fine, LLDB is great, but complex to learn
 - Rewrite urge: 0/10 - since I implemented the first instructions and it first compiled with **primarily warnings**, this was not quite a problem
 - Stack trace nightmares: 9/10 - **somehow** I still can't figure out, what happened at the end of this project with the compiler going completely ***COWABUNGA***, but as the saying goes: *If it runs, don't touch it!*
 
