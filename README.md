@@ -144,8 +144,6 @@ An interactive browser-based visualizer is included (`mac_vm_visualization.html`
 - Step `IP` forward through the instruction list
 - Read the execution log at the bottom, which records every operation with the actual values involved
 
-Open `mac_vm_visualization.html` in any browser — no server or build step needed.
-
 ---
 
 ## Register Reference (enum values)
